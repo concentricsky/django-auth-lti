@@ -25,16 +25,17 @@ def reverse(*args, **kwargs):
     exclude_resource_link_id = kwargs.pop('exclude_resource_link_id', False)
 
     url = django_reverse(*args, **kwargs)
-    resource_link_id = request.LTI.get('resource_link_id')
-    if not exclude_resource_link_id and resource_link_id is not None:
-        # Append resource_link_id query param if exclude_resource_link_id kwarg was not passed or is False
-        parsed = urlparse(url)
-        query = parse_qs(parsed.query)
-        if 'resource_link_id' not in query.keys():
-            query['resource_link_id'] = request.LTI.get('resource_link_id')
-            url = urlunparse(
-                (parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(query), parsed.fragment)
-            )
+    if not exclude_resource_link_id and request and request.LTI:
+        resource_link_id = request.LTI.get('resource_link_id')
+        if resource_link_id is not None:
+            # Append resource_link_id query param if exclude_resource_link_id kwarg was not passed or is False
+            parsed = urlparse(url)
+            query = parse_qs(parsed.query)
+            if 'resource_link_id' not in query.keys():
+                query['resource_link_id'] = request.LTI.get('resource_link_id')
+                url = urlunparse(
+                    (parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(query), parsed.fragment)
+                )
     return url
 
 
