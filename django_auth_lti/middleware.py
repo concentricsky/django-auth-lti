@@ -42,6 +42,12 @@ class LTIAuthMiddleware(MiddlewareMixin):
                 " 'django.contrib.auth.middleware.AuthenticationMiddleware'"
                 " before the PINAuthMiddleware class.")
 
+        # Other functions in django-auth-lti expect there to be an LTI attribute on the request object
+        # This enables backwards compatibility with consumers of this package who still want to use this
+        # single launch version of LTIAuthMiddleware
+        default_lti = request.session.get('LTI_LAUNCH', {}) if getattr(settings, 'LTI_STORE_IN_SESSION', True) else {}
+        setattr(request, 'LTI', default_lti)
+
         if request.method == 'POST' and request.POST.get('lti_message_type') == 'basic-lti-launch-request':
 
             logger.debug('received a basic-lti-launch-request - authenticating the user')
@@ -109,17 +115,16 @@ class LTIAuthMiddleware(MiddlewareMixin):
                     custom_roles = request.POST.get(settings.LTI_CUSTOM_ROLE_KEY, '').split(',')
                     lti_launch['roles'] += filter(None, custom_roles)  # Filter out any empty roles
 
-                request.session['LTI_LAUNCH'] = lti_launch
+                if getattr(settings, 'LTI_STORE_IN_SESSION', True):
+                    request.session['LTI_LAUNCH'] = lti_launch
+                setattr(request, 'LTI', lti_launch)
 
             else:
                 # User could not be authenticated!
                 logger.warning('user could not be authenticated via LTI params; let the request continue in case another auth plugin is configured')
 
-        # Other functions in django-auth-lti expect there to be an LTI attribute on the request object
-        # This enables backwards compatibility with consumers of this package who still want to use this
-        # single launch version of LTIAuthMiddleware
-        setattr(request, 'LTI', request.session.get('LTI_LAUNCH', {}))
-        if not request.LTI:
+
+        if not hasattr(request, 'LTI'):
             logger.warning("Could not find LTI launch parameters")
 
     def clean_username(self, username, request):
