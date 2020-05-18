@@ -1,14 +1,12 @@
 import logging
-import json
-import django_auth_lti.patch_reverse
 
-from collections import OrderedDict
+import django_auth_lti.patch_reverse
 
 from django.contrib import auth
 from django.core.exceptions import ImproperlyConfigured
 from django.conf import settings
 
-from timer import Timer
+from .timer import Timer
 
 from .thread_local import set_current_request
 
@@ -70,7 +68,7 @@ class MultiLTILaunchAuthMiddleware(MiddlewareMixin):
                 request.user = user
                 with Timer() as t:
                     auth.login(request, user)
-    
+
                 logger.debug('login() took %s s' % t.secs)
 
                 resource_link_id = request.POST.get('resource_link_id', None)
@@ -119,22 +117,35 @@ class MultiLTILaunchAuthMiddleware(MiddlewareMixin):
                 # If a custom role key is defined in project, merge into existing role list
                 if hasattr(settings, 'LTI_CUSTOM_ROLE_KEY'):
                     custom_roles = request.POST.get(settings.LTI_CUSTOM_ROLE_KEY, '').split(',')
-                    lti_launch['roles'] += filter(None, custom_roles)  # Filter out any empty roles
+                    lti_launch['roles'] += [_f for _f in custom_roles if _f]  # Filter out any empty roles
 
                 lti_launches = request.session.get('LTI_LAUNCH')
-                if not lti_launches or not isinstance(lti_launches, OrderedDict):
-                    lti_launches = OrderedDict()
+                if not lti_launches:
+                    lti_launches = {}
                     request.session['LTI_LAUNCH'] = lti_launches
+
+                # Count the LTI launches and index each one so they can be ordered.
+                # We are not using an OrderedDict because django serializes using JSON by default, which would
+                # require a custom serializer to ensure objects are deserialized appropriately
+                lti_launch_count = request.session.get('LTI_LAUNCH_COUNT', 0) + 1
+                request.session['LTI_LAUNCH_COUNT'] = lti_launch_count
+                lti_launch['_order'] = lti_launch_count
 
                 # Limit the number of LTI launches stored in the session
                 max_launches = getattr(settings, 'LTI_AUTH_MAX_LAUNCHES', 10)
-                logger.info("LTI launch count %s [max=%s]" % (len(lti_launches.keys()), max_launches))
-                if len(lti_launches.keys()) >= max_launches:
-                    invalidated_launch = lti_launches.popitem(last=False)
-                    logger.info("LTI launch invalidated: %s", json.dumps(invalidated_launch, indent=4))
+                logger.info("LTI launch count %s [max=%s]" % (len(list(lti_launches.keys())), max_launches))
+                if len(list(lti_launches.keys())) >= max_launches:
+                    # If the current resource is being re-launched, then we should just invalidate the old launch,
+                    # otherwise we should evict the oldest launch (FIFO).
+                    remove_resource_link_id = resource_link_id
+                    if remove_resource_link_id not in lti_launches:
+                        ordered_launches = sorted(list(lti_launches.items()), key=lambda item: item[1].get('_order', -1))
+                        remove_resource_link_id = ordered_launches[0][0]
+                    invalidated_launch = lti_launches.pop(remove_resource_link_id)
+                    logger.info("LTI launch invalidated: %s", invalidated_launch)
 
                 lti_launches[resource_link_id] = lti_launch
-                logger.info("LTI launch added to session: %s", json.dumps(lti_launch, indent=4))
+                logger.info("LTI launch added to session: %s", lti_launch)
             else:
                 # User could not be authenticated!
                 logger.warning('user could not be authenticated via LTI params; let the request continue in case another auth plugin is configured')
